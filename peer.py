@@ -54,7 +54,7 @@ def periodic_broadcast():
 # region File Transfer Function
 
  #requests filename and kills itself (outside of global listener)
-def request_file(client_soc: socket.socket, filename: str):
+def request_file(filename: str):
     global peer_id
     if filename in known_files:
         source_peer = known_files[filename]
@@ -63,45 +63,64 @@ def request_file(client_soc: socket.socket, filename: str):
         request_datagram = build_file_request(filename)
         client_soc.sendto(request_datagram, source_peer_address)
 
- #handles all incoming tcp segments
+ #main server that handles all incoming tcp segments
     # can be incoming Requests
-    # can be landing File Chunks          
+    # can be landing File Chunks       
 def global_listener():
+    soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    soc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    soc.bind((PEER_IP_REGISTRY[peer_id]))
+    soc.listen(5)  # Allow up to 5 queued connections
+
+    while True:
+        conn, addr = soc.accept()
+        print(f"[GLOBALListener] Accepted connection from {addr}")
+        # Spawn a new thread to handle this connection
+        threading.Thread(target=handle_peer, args=(conn,), daemon=True).start()
+
+ # REFACTORED:
+    # will handle and talk to exactly one other peer both incoming and outgoing
+    # one incoming and outgoing connection at a time
+    # queues specific to client | will support multiple requests and downloads concurrently?
+def handle_peer(conn: socket.socket):
     global peer_id    
-    downloads_queue = queue.Queue() # contains Tuples of (raw_segment, addr)
-    requests_queue = queue.Queue() # contains Tuples of (filename, requesting_peer)
+    downloads_queue = queue.Queue() # contains Tuples of (raw_message, addr)
+    requests_queue: queue.Queue[str, int] = queue.Queue() # contains Tuples of (filename, requesting_peer)
     acknowledged = threading.Event()
     acknowledged.clear()
 
-    soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    soc.bind(("", BROADCAST_PORT))  # Bind to the broadcast port
-
     #spawn concurrent thread to process download_queue()
+    threading.Thread(target=uploadThread, args=(conn,), daemon=True).start()
+
     #spawn concurrent thread (no plural) to process requests_queue()
-         # cannot spawn one worker thread to process each request cause will cause problems with acknowledgements
+         # cannot spawn only one worker thread to process each request cause will cause problems with acknowledgements
+    threading.Thread(target=processDownloadsThread, args=(conn,), daemon=True).start()
 
     while True:
-        raw_segment, addr = soc.recvfrom(1024) # need to be > FILE_CHUNK_SIZE
-        if raw_segment:
-            msg_type = raw_segment[0:1].decode('utf-8')
+        raw_message = conn.recv(1024) # need to be > FILE_CHUNK_SIZE
+        if raw_message:
+            msg_type = raw_message[0:1].decode('utf-8')
             if msg_type == 'R':  # incoming Request
-                # spawns a upload thread that will send chunks of data to requesting peer
+                requests_queue.put()
                 # needs to use addr to find requesting peer
+                message = parse_file_request(raw_message)
+                requests_queue.put(message)
             elif msg_type == 'T':  # File transfer
-                #can queue raw_segment and have a concurrently running process_downloads() thread
-                downloads_queue.put(raw_segment, addr)
+                #can queue raw_message and have a concurrently running process_downloads() thread
+                message = parse_file_transfer(raw_message)
+                downloads_queue.put(message)
             elif msg_type == 'A':
                 acknowledged.set()
             else:
                 print(f"Unexpected message type encountered, packets tossed.")
 
-def uploadThread(request_queue: queue.Queue, soc: socket.socket, acknowleged: threading.Event):
+def uploadThread(request_queue: queue.Queue[str, int], soc: socket.socket, acknowleged: threading.Event):
     #only upload from local_files
     #there may be a mismatch between current peer local_files and other peers' known files
     #assuming no deletes, should be fine
     while True:
         try:
-            
+            filename, requesting_peer = request_queue.get()
             file_path = f"{peer_folder}/{filename}"
             
             #break down file in filepath into chunks
@@ -115,15 +134,33 @@ def uploadThread(request_queue: queue.Queue, soc: socket.socket, acknowleged: th
         except queue.Empty:
             continue 
 
+def utility_build_file_sequences(filename):
+    CHUNK_SIZE = 1024  
+    file_chunks = []
+
+    try:
+        with open(filename, 'rb') as file: 
+            byte_offset = 0
+            while True:
+                chunk = file.read(CHUNK_SIZE)  
+                if not chunk:
+                    break
+
+                file_chunks[byte_offset] = chunk
+
+                byte_offset += CHUNK_SIZE
+        print(f"[CLIENT] File '{filename}' processed into {len(file_chunks)} chunks.")
+    except IOError as e:
+        print(f"[CLIENT] Error reading file '{filename}': {e}")
 
     
 
 def processDownloadsThread(download_queue: queue.Queue, soc: socket.socket):
     while True:
         try:
-            #download_queue has a queue of (raw_segment, addr) intended for download on current peer
-            raw_segment, addr = download_queue.get(timeout=1)
-            write_to_file_BYTE(peer_folder, parse_file_transfer(raw_segment))
+            #download_queue has a queue of (raw_message, addr) intended for download on current peer
+            raw_message, addr = download_queue.get(timeout=1) #waits 1 sec and raises Empty is empty
+            write_to_file_BYTE(peer_folder, parse_file_transfer(raw_message))
             #send ack
 
             ack_message = build_ack_message(peer_id)
