@@ -10,4 +10,4 @@ I also created message type 'E' to signal EOF in file transfers.
 
 Ideas for improvement:
  - broadcast functionality does not include handling removed files and updating removed files
-
+ - my outgoing file request will busy wait if filename is not a known file.
