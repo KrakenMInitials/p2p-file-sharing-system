@@ -17,7 +17,7 @@ peer_files:dict[int, set[str]] = {
 
 
 #=================================================================================================================
-# region Broadcast Function start
+# region Broadcast Function
 BROADCAST_ADDRESS = "255.255.255.255"
 BROADCAST_PORT = 8000
 
@@ -30,7 +30,7 @@ def listen_for_broadcasts():
         while True:
             raw_datagram, addr = sock.recvfrom(1024) #addr should always be source_peer's address if want to use for updating registry or known peers
             source_peer, filename = parse_file_offer(raw_datagram)
-            if raw_datagram and source_peer != peer_id:  # Ignore own broadcasts
+            if raw_datagram and source_peer != peer_id:  # ignore own broadcasts
                 if not filename in known_files:
                     known_files[filename] = source_peer
                     peer_files.setdefault(source_peer, set()).add(filename) #handles case set empty
@@ -45,10 +45,61 @@ def periodic_broadcast():
                 print(f"[BROADCAST] Broadcasting offer for {filename}")
                 datagram = build_file_offer(peer_id, filename)
                 sock.sendto(datagram, (BROADCAST_ADDRESS, BROADCAST_PORT))
-            time.sleep(5)  # Broadcast every 5 seconds
+            time.sleep(5) 
 
 #endregion Broadcast Function end
 #=================================================================================================================
+# region File Transfer Function
+
+ #requests filename and kills itself (outside of global listener)
+def request_file(client_soc: socket.socket, filename: str):
+    global peer_id
+    if filename in known_files:
+        source_peer = known_files[filename]
+        source_peer_address = PEER_IP_REGISTRY[source_peer]  # Get the address of the source peer
+        print(f"[FileDownloader] Requesting file {filename} from Peer {source_peer}")
+        request_datagram = build_file_request(filename)
+        client_soc.sendto(request_datagram, source_peer_address)
+
+ #handles all incoming tcp segments
+    # can be incoming Requests
+    # can be landing File Chunks          
+def global_listener():
+    global peer_id
+    download_queue = queue.Queue()
+    #spawn concurrent thread to process download_queue()
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as soc:
+        soc.bind(("", BROADCAST_PORT))  # Bind to the broadcast port
+        while True:
+            raw_segment, addr = soc.recvfrom(1024)
+            if raw_segment:
+                msg_type = raw_segment[0:1].decode('utf-8')
+                if msg_type == 'R':  # incoming Request
+                    # spawns a upload thread that will send chunks of data to requesting peer
+                    # needs to use addr to find requesting peer
+                elif msg_type == 'T':  # File transfer
+                    #can queue raw_segment and have a concurrently running process_downloads() thread
+                    download_queue.put(parse_file_transfer(raw_segment))
+                else:
+                    print(f"Unexpected message type encountered, incoming segment tossed.")
+
+def uploadThread(filename: str, source_peer: int):
+
+def processDownloadsThread(download_queue = queue.Queue()):
+    while True:
+        try:
+            chunk = download_queue.get(timeout=1)  # waits up to 1 sec, raises Empty if nothing
+
+        except queue.Empty:
+            continue 
+
+
+
+
+#endregion File Transfer Function end
+#=================================================================================================================
+
  # start() op on assignment desc.
  # path: the folder specific to the peer (may include local files)
 def initialize():
@@ -86,8 +137,8 @@ def main(): # args: peerID
         print("Usage: python peer.py <peer_id>")
         sys.exit(1)
     initialize()
-    threading.Thread(target=listen_for_broadcasts, name="BroadcastListener", daemon=True).start()
-    threading.Thread(target=periodic_broadcast, name="BroadcastSender", daemon=True).start()
+    threading.Thread(target=listen_for_broadcasts, name="BROADCASTListener", daemon=True).start()
+    threading.Thread(target=periodic_broadcast, name="BROADCASTSender", daemon=True).start()
     print(f"Peer {peer_id} is now running and listening for broadcasts...")
     
     while True: 
