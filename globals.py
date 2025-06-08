@@ -4,6 +4,8 @@ from collections import namedtuple as namedTuple
 
 LOCALHOST = "localhost"
 
+FILE_CHUNK_SIZE = 1024 
+
  # will be replaced by central_server later
 PEER_IP_REGISTRY ={
     1: (LOCALHOST, 5001),
