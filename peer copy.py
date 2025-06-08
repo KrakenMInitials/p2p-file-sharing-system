@@ -60,7 +60,7 @@ def periodic_broadcast():
  # - global_sender() to handle outgoing requests, incoming file transfers, and outgoing acks
  # - global_listener() to handle incoming requests, out going file transfers, and incoming acks
     #each will spawn thread to handle each new connection and have a handle_incoming/outgoing_peer() thread
-    #each handle_peer() function is a one-way connection to one peer
+
 
  #TODO: Main should spawn multiple threads with request_file() to support multiple outgoing files?
 def global_sender(filename: str):
@@ -99,25 +99,36 @@ def global_listener():
 EOF_SENTINEL = object() #cool 'flag' to pass into the downloads_queue to signal EOF suggested by Copilot
 def handle_incoming_peer(conn: socket.socket):
     global peer_id    
+    downloads_queue: queue.Queue[bytes | object] = queue.Queue() # contains message or EOF_SENTINEL
     requests_queue: queue.Queue[str] = queue.Queue() # contains filename
     acknowledged = threading.Event()
     acknowledged.clear()
 
+    #spawn concurrent thread to process download_queue()
+    threading.Thread(target=uploadThread, args=(conn, requests_queue, acknowledged), daemon=True).start()
+    
     #spawn concurrent thread (no plural) to process requests_queue()
          # cannot spawn only one worker thread to process each request cause will cause problems with acknowledgements
-    threading.Thread(target=uploadThread, args=(conn, requests_queue, acknowledged), daemon=True).start()
+    threading.Thread(target=processDownloadsThread, args=(conn, downloads_queue), daemon=True).start()
 
     while True:
         raw_message = conn.recv(1024) # need to be > FILE_CHUNK_SIZE
         if raw_message:
             msg_type = raw_message[0:1].decode('utf-8')
             if msg_type == 'R':  # incoming Request
+                # needs to use addr to find requesting peer
                 message = parse_file_request(raw_message)
                 requests_queue.put(message)
+            elif msg_type == 'T':  # outgoingFile transfer
+                #can queue raw_message and have a concurrently running process_downloads() thread
+                message = parse_file_transfer(raw_message)
+                downloads_queue.put(message)
             elif msg_type == 'A':
                 acknowledged.set()
+            elif msg_type == 'E': #EOF
+                downloads_queue.put(EOF_SENTINEL)
             else:
-                print(f"[GLOBAlListener] Unexpected message type encountered, packets tossed.")
+                print(f"Unexpected message type encountered, packets tossed.")
 
 def uploadThread(conn: socket.socket, request_queue: queue.Queue[str], acknowleged: threading.Event):
     #only upload from local_files
