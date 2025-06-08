@@ -2,12 +2,11 @@ import struct
 
 MAX_FILENAME_LENGTH = 64 #some areas statically use 64
 
-# BUILDS
+#region BUILDS
 def build_file_offer(peerID: int, filename: str) -> bytes:
     msg_type = 'O'.encode('utf-8')
-    enc_peer_id = struct.pack("!I", peerID)
     enc_filename = filename.encode('utf-8').ljust(MAX_FILENAME_LENGTH, b'\x00')
-    return struct.pack("!cI64s", msg_type, enc_peer_id, len(filename), enc_filename)
+    return struct.pack("!cII64s", msg_type, peerID, len(filename), enc_filename)
 
 def build_file_request(filename: str) -> bytes:
     msg_type = 'R'.encode('utf-8')
@@ -16,19 +15,18 @@ def build_file_request(filename: str) -> bytes:
 
 def build_file_transfer(data: bytes) -> bytes:
     msg_type = 'T'.encode('utf-8')
-    data_length = len(data)
-    return struct.pack("!cI", msg_type, data_length) + data
+    return struct.pack("!cI", msg_type, len(data)) + data
 
 def build_ack_message(peer_id: int) -> bytes:
     msg_type = 'A'.encode('utf-8')
     enc_peer_id = struct.pack("!I", peer_id)
     return struct.pack("!cI", msg_type, enc_peer_id)
+#endregion BUILDS
 
-# PARSES
+#region PARSES
 def parse_file_offer(segment: bytes) -> tuple[int, str]:
-    _, enc_peer_id, filename_length, enc_filename = struct.unpack("!cI64s", segment)
+    _, peer_id, filename_length, enc_filename = struct.unpack("!cII64s", segment)
     filename = enc_filename[:filename_length].decode('utf-8').rstrip('\x00')
-    peer_id = struct.unpack("!I", enc_peer_id)[0]
     return peer_id, filename
 
 def parse_file_request(segment: bytes) -> str:
@@ -45,3 +43,4 @@ def parse_ack_message(segment: bytes) -> int:
     _, enc_peer_id = struct.unpack("!cI", segment)
     peer_id = struct.unpack("!I", enc_peer_id)[0]
     return peer_id
+#endregion PARSES

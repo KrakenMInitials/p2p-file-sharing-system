@@ -1,9 +1,11 @@
 import socket, time, sys, queue, threading
 from concurrent.futures import ThreadPoolExecutor
+from collections import namedtuple as namedTuple
 
 LOCALHOST = "localhost"
 
-PEER_IP_LOOKUP ={
+ # will be replaced by central_server later
+PEER_IP_REGISTRY ={
     1: (LOCALHOST, 5001),
     2: (LOCALHOST, 5002),
     3: (LOCALHOST, 5003),
