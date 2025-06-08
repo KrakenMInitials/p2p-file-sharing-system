@@ -69,7 +69,7 @@ def request_file(client_soc: socket.socket, filename: str):
 def global_listener():
     global peer_id    
     downloads_queue = queue.Queue() # contains Tuples of (raw_segment, addr)
-
+    requests_queue = queue.Queue() # contains Tuples of (filename, requesting_peer)
     acknowledged = threading.Event()
     acknowledged.clear()
 
@@ -77,9 +77,11 @@ def global_listener():
     soc.bind(("", BROADCAST_PORT))  # Bind to the broadcast port
 
     #spawn concurrent thread to process download_queue()
+    #spawn concurrent thread (no plural) to process requests_queue()
+         # cannot spawn one worker thread to process each request cause will cause problems with acknowledgements
 
     while True:
-        raw_segment, addr = soc.recvfrom(1024) # = 
+        raw_segment, addr = soc.recvfrom(1024) # need to be > FILE_CHUNK_SIZE
         if raw_segment:
             msg_type = raw_segment[0:1].decode('utf-8')
             if msg_type == 'R':  # incoming Request
@@ -88,23 +90,32 @@ def global_listener():
             elif msg_type == 'T':  # File transfer
                 #can queue raw_segment and have a concurrently running process_downloads() thread
                 downloads_queue.put(raw_segment, addr)
+            elif msg_type == 'A':
+                acknowledged.set()
             else:
                 print(f"Unexpected message type encountered, packets tossed.")
 
-def uploadThread(filename: str, source_peer: int, soc: socket.socket, acknowleged: threading.Event):
+def uploadThread(request_queue: queue.Queue, soc: socket.socket, acknowleged: threading.Event):
     #only upload from local_files
     #there may be a mismatch between current peer local_files and other peers' known files
     #assuming no deletes, should be fine
-    file_path = f"{peer_folder}/{filename}"
-    
-    #break down file in filepath into chunks
+    while True:
+        try:
+            
+            file_path = f"{peer_folder}/{filename}"
+            
+            #break down file in filepath into chunks
 
-    for file_chunk in file:
-        file_chunk: bytes
-        soc.sendall(build_file_transfer(file_chunk))
+            for file_chunk in file:
+                file_chunk: bytes
+                soc.sendall(build_file_transfer(file_chunk))
 
-        acknowleged.wait() #blocking wait for ack response
-        acknowleged.clear() #reset ack
+                acknowleged.wait() #blocking wait for ack response
+                acknowleged.clear() #reset ack
+        except queue.Empty:
+            continue 
+
+
     
 
 def processDownloadsThread(download_queue: queue.Queue, soc: socket.socket):
