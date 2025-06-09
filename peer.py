@@ -77,22 +77,21 @@ def periodic_broadcast():
 # - will also reduce complexity
 #-------------------------------GlobalRequester---------------------------------------
 pending_request = False
-def start_global_requester(filename: str):
+def start_global_requester(filename: str, forced_checksum_fail = True):
     global peer_id
-
-    
+    print(f"New request with ChecksumFail:{forced_checksum_fail}")
     while filename not in known_files: #busy wait until file known, potential issues
         print(f"[GLOBALRequester] busy waiting due to unknown peer to download '{filename}'")
         time.sleep(3) 
     source_peer = known_files[filename]
     source_peer_address = PEER_IP_REGISTRY[source_peer]  # Get the address of the source peer
 
-    handle_outgoing_peer(source_peer_address, filename)
+    handle_outgoing_peer(source_peer_address, filename, forced_checksum_fail)
     #where to put unknown file logic? --might not be neccessary if broadcasts are handled right,
     # maybe busy wait a handle_outgoing_thread until file known?
 
 EOF_SENTINEL = object() #cool 'flag' to pass into the downloads_queue to signal EOF suggested by Copilot
-def handle_outgoing_peer(source_peer_address, filename: str):
+def handle_outgoing_peer(source_peer_address, filename: str, forced_checksum_fail):
     #request a file using build_file_request()
     # loop:
     #   wait for incoming file transfers
@@ -102,49 +101,76 @@ def handle_outgoing_peer(source_peer_address, filename: str):
     conn.connect(source_peer_address)
 
     downloads_queue = queue.Queue()
-    downloads_thread = threading.Thread(target=downloadsThread, args=(conn, downloads_queue, filename), daemon=True)
+    downloads_thread = threading.Thread(target=downloadsThread, args=(conn, downloads_queue, filename, forced_checksum_fail), daemon=True)
     downloads_thread.start()
 
     print(f"[Requester] Requesting file {filename} from Peer {known_files[filename]}") # outgoing request
     request = build_file_request(filename)
     conn.sendall(request)
 
+    buffer = b''
     while True:
-        raw_message = conn.recv(1024) # need to be > FILE_CHUNK_SIZE
-        if not raw_message or len(raw_message) < 1:
+        data = conn.recv(1024) # need to be > FILE_CHUNK_SIZE
+        if not data or len(data) < 1:
             continue
-        msg_type = chr(raw_message[0])
-        if msg_type == 'T':  # incoming File Transfer
-            message = parse_file_transfer(raw_message)
-            downloads_queue.put(message)
-        elif msg_type == 'E':
-            exp_checksum = parse_file_transfer_EOF((raw_message))
-            downloads_queue.put((EOF_SENTINEL, exp_checksum))
-            downloads_thread.join() #wait for child thread to die
-            break
-        else:
-            print(f"[Requester] Unexpected message type encountered, packets tossed.")
-    print(f"[Requester] Request for {filename} ended.")
+        buffer += data
+        
+        while True:
+            if len(buffer) < 1:
+                break
+            msg_type = chr(buffer[0])
+            if msg_type == 'T':  # incoming File Transfer
+                if len(buffer) < 5: #buffer has data_length of header
+                    break
+                _, data_length = struct.unpack('!cI', buffer[:5])
+                if len(buffer) < 5 + data_length: #buffer missing all data
+                    break
+                raw_message = buffer[:5+data_length]
+                message = parse_file_transfer(raw_message)
+                downloads_queue.put(message)
+                buffer = buffer[5+data_length:]
+            elif msg_type == 'E':
+                if len(buffer) < 65: #buffer has data_length of file
+                    break
+                raw_message = buffer[:65]
+                exp_checksum = parse_file_transfer_EOF(raw_message)
+                downloads_queue.put((EOF_SENTINEL, exp_checksum))
+                downloads_thread.join() #wait for child thread to die
+                buffer = buffer[65:]
+                print(f"[Requester] Request for {filename} ended.")
+                return
+            else:
+                print(f"[Requester] Unexpected message type: '{msg_type}', packets tossed.")
+                buffer = buffer[1:]
 
 def downloadsThread(conn: socket.socket,
                      download_queue: queue.Queue[bytes | object],
-                       filename):
+                       filename: str, 
+                       forced_first_checksum_fail: bool):
     local_filepath = os.path.join(peer_folder, filename)
+
     while True:
         try:
             #download_queue has a queue of (raw_message, addr) intended for download on current peer
             chunk = download_queue.get(timeout=1) #waits 1 sec and raises Empty is empty
-            if EOF_SENTINEL in chunk:
+            if chunk[0] == EOF_SENTINEL:
                 local_files.add(filename)
                 conn.close()
 
                 #if checksum mismatch, create a new global_sender() request
                 actual_checksum = file_checksum(local_filepath)
                 expected_checksum = chunk[1]
+                if isinstance(expected_checksum, bytes): #if bytes turn to string
+                    expected_checksum = expected_checksum.decode('utf-8')
 
-                if actual_checksum != expected_checksum:
+                if forced_first_checksum_fail:#manually corrupt checksum
+                    actual_checksum = "corrupted"
+
+                if (actual_checksum != expected_checksum):
                     print(f"[downloadsThread] Checksum failed: making new request.")
-                    new_request = threading.Thread(target=start_global_requester, args=(filename,), daemon=True)
+                    if os.path.exists(local_filepath):
+                        os.remove(local_filepath)
+                    new_request = threading.Thread(target=start_global_requester, args=(filename,False), daemon=True)
                     new_request.start() 
                 break
                 #finish up thread chain
@@ -237,6 +263,9 @@ def uploadsThread(conn: socket.socket,
 
             expected_checksum = file_checksum(file_path)
             #send EOF
+            print("=======================")
+            print(f"EOF package: {build_file_transfer_EOF(expected_checksum)}")
+            print("=======================")
             conn.sendall(build_file_transfer_EOF(expected_checksum))
         except queue.Empty:
             continue 

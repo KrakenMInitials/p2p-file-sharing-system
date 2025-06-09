@@ -1,3 +1,18 @@
+Moe's P2P Networked File System
+
+
+
+
+
+
+
+
+
+
+
+
+6/7/2025
+
 I used UDP to handle broadcasts because if I used TCP:
 1. I would have to flood a range of TCP ports on sending
 2. The bigger problem is the amount of parsing I have to do on recieving (all 4 msg types will arrive on the same port)
@@ -9,6 +24,7 @@ The original assignment required acknowledgements messages to include which Peer
 I also created message type 'E' to signal EOF in file transfers.
 
 downloads_queue and requests_queue though exist will always hold one item max due to the busy waits for acks
+
 
 Ideas for improvement:
  - broadcast functionality does not include handling removed files and updating removed files

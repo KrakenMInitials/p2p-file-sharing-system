@@ -2,6 +2,8 @@ import struct
 
 MAX_FILENAME_LENGTH = 64 #some areas statically use 64
 
+#tcp buffer handling is static offsets (careful with changing protocols)
+
 #region BUILDS
 def build_file_offer(peerID: int, filename: str) -> bytes:
     msg_type = 'O'.encode('utf-8')
@@ -23,7 +25,7 @@ def build_ack_message(peer_id: int) -> bytes:
 
 def build_file_transfer_EOF(checksum: str) -> bytes:
     msg_type = 'E'.encode('utf-8')
-    enc_checksum = checksum.encode("utf-8")
+    enc_checksum = checksum.encode("utf-8").ljust(MAX_FILENAME_LENGTH, b'\x00')
     return struct.pack("!c64s", msg_type, enc_checksum)
 #endregion BUILDS
 
