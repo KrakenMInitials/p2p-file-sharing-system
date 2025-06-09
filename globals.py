@@ -1,7 +1,3 @@
-import socket, time, sys, queue, threading
-from concurrent.futures import ThreadPoolExecutor
-from collections import namedtuple as namedTuple
-
 LOCALHOST = "localhost"
 SERVER_ADDRESS = (LOCALHOST, 5000)
 

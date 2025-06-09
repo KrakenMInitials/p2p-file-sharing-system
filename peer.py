@@ -23,7 +23,10 @@ known_files:dict[str, int] = {
 peer_files:dict[int, set[str]] = {
     # peer_id: set of filenames
 }
-#above two dicts are double dictionaries
+#above two dicts are double dictionaries | current code only uses known_files
+
+server_soc: socket.socket = None
+
 
 local_files = set() #stores all COMPELETED FILENAMES
 
@@ -83,7 +86,7 @@ def start_global_requester(filename: str, forced_checksum_fail = True):
         print(f"[GLOBALRequester] busy waiting due to unknown peer to download '{filename}'")
         time.sleep(3) 
     source_peer = known_files[filename]
-    source_peer_address = PEER_IP_REGISTRY[source_peer]  # Get the address of the source peer
+    source_peer_address = fetch_peer_address(source_peer)  # Get the address of the source peer
 
     handle_outgoing_peer(source_peer_address, filename, forced_checksum_fail)
     #where to put unknown file logic? --might not be neccessary if broadcasts are handled right,
@@ -311,13 +314,13 @@ def initialize(port: int):
      # end of Github Copilot
 
     #register to server
-    server_soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_soc.connect(SERVER_ADDRESS)
+    soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    soc.connect(SERVER_ADDRESS)
     registration = build_request_register(peer_id, port)
-    server_soc.sendall(registration)
+    soc.sendall(registration)
 
     #busy wait server
-    raw_response = server_soc.recv(1024)
+    raw_response = soc.recv(1024)
     if raw_response:
         msg_type = raw_response[0:2].decode('utf-8')
         if (msg_type == 'SR'):
@@ -331,11 +334,28 @@ def initialize(port: int):
             print("Unexpected server resposne. Closing client to prevent errors.")
             sys.exit(1)
 
-    return server_soc
+    global server_soc
+    server_soc = soc
+    return
 
 def fetch_peer_address(target_peer_id: int):
-    #busy waits as well
-    
+    while True:
+        request = build_request_lookup(target_peer_id)  
+        server_soc.sendall(request)
+        
+        try:
+            server_soc.settimeout(5)
+            raw_response = server_soc.recv(1024)
+            if raw_response:
+                msg_type = raw_response[0:2].decode('utf-8')
+                if (msg_type == 'SL'):
+                    addr = parse_response_lookup(raw_response)
+                    print(f"Succesfully fetched target peer IP address from server.")
+                    print(f"debug: {addr} ({type(addr)})")    
+                    return addr  
+        finally:
+            print("Fetch peer address failed. Retrying...")
+            time.sleep(3)
 
 def main(): # args: peerID 
     global peer_id
@@ -349,7 +369,7 @@ def main(): # args: peerID
     else:
         print("Usage: python peer.py <peer_id> <port>")
         sys.exit(1)
-    initialize(port)
+    server_soc: socket.socket = initialize(port)
 
     broadcast_listener = threading.Thread(target=listen_for_broadcasts, daemon=True)
     broadcast_listener.start()

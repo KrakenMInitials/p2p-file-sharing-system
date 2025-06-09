@@ -24,6 +24,7 @@ def start_global_listener():
         threading.Thread(target=handle_client, args=(conn,), daemon=True).start()
 
 def handle_client(conn: socket.socket):
+    client_peer_id: int
     try:
         while True:
             raw_message = conn.recv(1024) # need to be > FILE_CHUNK_SIZE
@@ -31,6 +32,7 @@ def handle_client(conn: socket.socket):
                 msg_type = raw_message[0:2].decode('utf-8')
                 if msg_type == 'SR':
                     peer_id, port = parse_request_register(raw_message)
+                    client_peer_id = peer_id
                     register_peer(conn, peer_id, port)
                     continue
                 elif msg_type == 'SL':
@@ -42,6 +44,7 @@ def handle_client(conn: socket.socket):
                     continue
     except ConnectionResetError as e:
         print(f"[SERVER] Client peer closed the connection abruptly.")
+        peer_IP_registry.pop(client_peer_id)
         conn.close()
         return
 
@@ -66,14 +69,19 @@ def register_peer(conn: socket.socket, peer_id, port):
 def lookup_addr(conn: socket.socket, target_peer_id):
     global peer_IP_registry
 
+    print("===================")
+    print(f"Debug: {peer_IP_registry}")
+    print("===================")
+
     if target_peer_id not in peer_IP_registry.keys():
+        print(f"Lookup failed for {target_peer_id}")
         err_message = build_response_error("Target peer not found.") #Error 2
         conn.sendall(err_message)
         return
     
     response = build_response_lookup(peer_IP_registry[target_peer_id])
     conn.sendall(response)
-    print(f"Lookup returned successsfully.")
+    print(f"Lookup returned successsfully: {peer_IP_registry[target_peer_id]}")
     return
 
 def main():

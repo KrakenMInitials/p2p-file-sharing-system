@@ -32,12 +32,12 @@ def build_file_transfer_EOF(checksum: str) -> bytes:
 #region PARSES
 def parse_file_offer(segment: bytes) -> tuple[int, str]:
     _, peer_id, filename_length, enc_filename = struct.unpack("!cII64s", segment)
-    filename = enc_filename[:filename_length].decode('utf-8').rstrip('\x00')
+    filename = enc_filename[:filename_length].decode('utf-8').rstrip('\x00').rstrip()
     return peer_id, filename
 
 def parse_file_request(segment: bytes) -> str:
     _, filename_length, enc_filename = struct.unpack("!cI64s", segment)
-    filename = enc_filename[:filename_length].decode('utf-8').rstrip('\x00')
+    filename = enc_filename[:filename_length].decode('utf-8').rstrip('\x00').rstrip()
     return filename
 
 def parse_file_transfer(segment: bytes) -> bytes:
@@ -51,7 +51,7 @@ def parse_ack_message(segment: bytes) -> int:
 
 def parse_file_transfer_EOF(segment: bytes) -> str: #returns expected checksum  
     _, checksum = struct.unpack("!c64s", segment)
-    return checksum
+    return checksum.decode('utf-8').rstrip('\x00').rstrip()
 #endregion PARSES
 
 #========================
@@ -75,7 +75,7 @@ def build_response_error(err_msg: str):
 def build_response_lookup(peer_addr: tuple[str,int]):
     host = peer_addr[0]
     enc_addr = host.encode("utf-8").ljust(MAX_FILENAME_LENGTH, b'\x00')
-    return struct.pack("!cc64SI", b'S', b'L', enc_addr, peer_addr[1])
+    return struct.pack("!cc64sI", b'S', b'L', enc_addr, peer_addr[1])
 
     #--------------
 
@@ -89,7 +89,7 @@ def parse_resposne_register(raw_msg: bytes) -> bool:
 
 def parse_response_error(raw_message: bytes):
     _, _, enc_err_msg = struct.unpack("!cc64s", raw_message)
-    err_msg = enc_err_msg.decode("utf-8")
+    err_msg = enc_err_msg.decode("utf-8").rstrip('\x00').rstrip()
     return err_msg
 
 def parse_request_lookup(raw_msg: bytes):
@@ -97,7 +97,7 @@ def parse_request_lookup(raw_msg: bytes):
     return peer_id
 
 def parse_response_lookup(raw_msg: bytes):
-    _, _, enc_host, port = struct.unpack("!cc64SI", raw_msg)
-    host = enc_host.decode("utf-8")
+    _, _, enc_host, port = struct.unpack("!cc64sI", raw_msg)
+    host = enc_host.decode("utf-8").rstrip('\x00').rstrip()
     peer_addr = (host, port)
     return peer_addr
