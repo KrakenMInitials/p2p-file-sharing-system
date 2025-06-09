@@ -4,7 +4,7 @@ from packet_format import *
 
 #INDIVIDUAL PEER INFORMATION STORED
 peer_id: int = -1
-peer_folder = f"./peer-{peer_id}"
+peer_folder: str
 neighbours:set[int] = set()
 
 known_files:dict[str, int] = {
@@ -64,14 +64,14 @@ def periodic_broadcast():
 
 # global_requester() doesn't need to be a separate thread like global_listener()
 # - will also reduce complexity
-#-----------------------------------------------------------------------------------------------------
+#-------------------------------GlobalRequester---------------------------------------
 pending_request = False
-def global_requester(filename: str):
+def start_global_requester(filename: str):
     global peer_id
 
     
     while filename not in known_files: #busy wait until file known, potential issues
-        print(f"[GLOBALRequester] busy waiting due to unknown filename")
+        print(f"[GLOBALRequester] busy waiting due to unknown peer to download '{filename}'")
         time.sleep(3) 
     source_peer = known_files[filename]
     source_peer_address = PEER_IP_REGISTRY[source_peer]  # Get the address of the source peer
@@ -79,24 +79,24 @@ def global_requester(filename: str):
     handle_outgoing_peer(source_peer_address, filename)
     #where to put unknown file logic? --might not be neccessary if broadcasts are handled right,
     # maybe busy wait a handle_outgoing_thread until file known?
-    
+
+EOF_SENTINEL = object() #cool 'flag' to pass into the downloads_queue to signal EOF suggested by Copilot
 def handle_outgoing_peer(source_peer_address, filename: str):
     #request a file using build_file_request()
     # loop:
     #   wait for incoming file transfers
     #   send back acks
 
-
-    # end validations
     conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     conn.connect(source_peer_address)
 
     downloads_queue = queue.Queue()
-    threading.Thread(target=downloadsThread, args=(conn, downloads_queue), daemon=True).start()
+    downloads_thread = threading.Thread(target=downloadsThread, args=(conn, downloads_queue, filename), daemon=True)
+    downloads_thread.start()
 
     print(f"[Requester] Requesting file {filename} from Peer {known_files[filename]}") # outgoing request
     request = build_file_request(filename)
-    conn.sendto(request, source_peer_address)
+    conn.sendall(request)
 
     while True:
         raw_message = conn.recv(1024) # need to be > FILE_CHUNK_SIZE
@@ -105,29 +105,41 @@ def handle_outgoing_peer(source_peer_address, filename: str):
             if msg_type == 'T':  # incoming File Transfer
                 message = parse_file_transfer(raw_message)
                 downloads_queue.put(message)
+            elif msg_type == 'E':
+                downloads_queue.put(EOF_SENTINEL)
+                downloads_thread.join() #wait for child thread to die
+                break
             else:
                 print(f"[Requester] Unexpected message type encountered, packets tossed.")
+    print(f"[Requester] Request for {filename} ended.")
 
-def downloadsThread(conn: socket.socket, download_queue: queue.Queue[bytes | object]):
+def downloadsThread(conn: socket.socket,
+                     download_queue: queue.Queue[bytes | object],
+                       filename):
     while True:
         try:
             #download_queue has a queue of (raw_message, addr) intended for download on current peer
             chunk = download_queue.get(timeout=1) #waits 1 sec and raises Empty is empty
             if chunk == EOF_SENTINEL:
-                local_files.add()
-                #finish up local_files update and downloading file tracking
+                local_files.add(filename)
+                conn.close()
+                break
+                #finish up thread chain
 
-            write_to_file_BYTE(peer_folder, chunk)
+            write_to_file_BYTE({os.path.join(peer_folder, filename)}, chunk)
             ack_message = build_ack_message(peer_id)
             conn.sendall(ack_message)
-
         except queue.Empty:
             continue 
-#------------------------------------------------------------------
+    print(f"[downloadsThread] Completeted {filename} download.")
+
+
+#-------------------------------GlobalListener-----------------------------------
  #main server that handles all incoming tcp segments
     # can be incoming Requests
-    # can be landing File Chunks       
-def global_listener():
+    # can be landing File Chunks
+    
+def start_global_listener():
     soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     soc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     soc.bind((PEER_IP_REGISTRY[peer_id]))
@@ -139,44 +151,67 @@ def global_listener():
         # Spawn a new thread to handle this connection
         threading.Thread(target=handle_incoming_peer, args=(conn,), daemon=True).start()
 
-EOF_SENTINEL = object() #cool 'flag' to pass into the downloads_queue to signal EOF suggested by Copilot
 def handle_incoming_peer(conn: socket.socket):
     global peer_id    
     requests_queue: queue.Queue[str] = queue.Queue() # contains filename
     acknowledged = threading.Event()
     acknowledged.clear()
 
+    handle_err = threading.Event()
+
     #spawn concurrent thread for outgoing file transfer
-    threading.Thread(target=uploadsThread, args=(conn, requests_queue, acknowledged), daemon=True).start()
+    uploads_thread = threading.Thread(target=uploadsThread, args=(conn, requests_queue, acknowledged, handle_err), daemon=True)
+    uploads_thread.start()
+    
+    try:
+        while True:
+            raw_message = conn.recv(1024) # need to be > FILE_CHUNK_SIZE
+            if raw_message:
+                msg_type = raw_message[0:1].decode('utf-8')
+                if msg_type == 'R':  # incoming Request
+                    message = parse_file_request(raw_message)
+                    requests_queue.put(message)
+                elif msg_type == 'A': # incoming Ack
+                    acknowledged.set()
+                else:
+                    print(f"[Listener] Unexpected message type encountered, packets tossed.")
+    except ConnectionResetError as e:
+        print(f"[Listener] Socket error: {e}. Remote peer closed the connection abruptly.")
+        print(f"[Listener] Closing handle for peer.")
+        conn.close()
+        handle_err.set()
+        uploads_thread.join()
 
-    while True:
-        raw_message = conn.recv(1024) # need to be > FILE_CHUNK_SIZE
-        if raw_message:
-            msg_type = raw_message[0:1].decode('utf-8')
-            if msg_type == 'R':  # incoming Request
-                message = parse_file_request(raw_message)
-                requests_queue.put(message)
-            elif msg_type == 'A': # incoming Ack
-                acknowledged.set()
-            else:
-                print(f"[Listener] Unexpected message type encountered, packets tossed.")
 
-def uploadsThread(conn: socket.socket, request_queue: queue.Queue[str], acknowleged: threading.Event):
+def uploadsThread(conn: socket.socket,
+                   request_queue: queue.Queue[str],
+                    acknowleged: threading.Event,
+                    handle_err: threading.Event):
     #only upload from local_files
     #there may be a mismatch between current peer local_files and other peers' known files
     #assuming no deletes, should be fine
     while True:
         try:
+            if handle_err.is_set():
+                break
             filename = request_queue.get()
-            file_path = f"{peer_folder}/{filename}"
+            file_path = os.path.join(peer_folder, filename)
             file_chunks = utility_split_file(file_path)
 
             for chunk in file_chunks:
                 chunk: bytes
                 conn.sendall(build_file_transfer(chunk))
 
-                acknowleged.wait() #blocking wait for ack response
+                while not acknowleged.is_set():
+                    acknowleged.wait(timeout=3) #blocking wait for ack response
+                    conn.sendall(build_file_transfer(chunk))
+                    print(f"[uploadThread] ACK Timeout retransmitting chunk...")
+                    if handle_err.is_set():
+                        break
                 acknowleged.clear() #reset ack
+
+            #send EOF
+            conn.sendall(build_file_transfer_EOF())
         except queue.Empty:
             continue 
 
@@ -192,7 +227,6 @@ def utility_split_file(filepath):
         print(f"File '{filepath}' processed into {len(file_chunks)} chunks.")
     except IOError as e:
         print(f"Error reading file '{filepath}': {e}")
-    file_chunks.append()
     return file_chunks
 
 
@@ -204,7 +238,7 @@ def utility_split_file(filepath):
 def initialize():
     print("initalizing peer...")
     global peer_id, peer_folder
-    
+    peer_folder = f"./peer-{peer_id}"
      #reset existing peer folder
     if os.path.exists(peer_folder):
         shutil.rmtree(peer_folder)
@@ -236,10 +270,21 @@ def main(): # args: peerID
         print("Usage: python peer.py <peer_id>")
         sys.exit(1)
     initialize()
-    threading.Thread(target=listen_for_broadcasts, name="BROADCASTListener", daemon=True).start()
-    threading.Thread(target=periodic_broadcast, name="BROADCASTSender", daemon=True).start()
+
+    broadcast_listener = threading.Thread(target=listen_for_broadcasts, daemon=True)
+    broadcast_listener.start()
+    broadcast_sender = threading.Thread(target=periodic_broadcast, daemon=True)
+    broadcast_sender.start()
     print(f"Peer {peer_id} is now running and listening for broadcasts...")
-    
+
+    global_listener = threading.Thread(target=start_global_listener, daemon=True)
+    global_listener.start()
+
+    if peer_id == 1:
+        filename:str = "piratedGame"
+        global_requester = threading.Thread(target=start_global_requester, args=(filename,), daemon=True)
+        global_requester.start() 
+
     while True: 
         time.sleep(1)
 

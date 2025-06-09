@@ -8,6 +8,10 @@ The original assignment required acknowledgements messages to include which Peer
 
 I also created message type 'E' to signal EOF in file transfers.
 
+downloads_queue and requests_queue though exist will always hold one item max due to the busy waits for acks
+
 Ideas for improvement:
  - broadcast functionality does not include handling removed files and updating removed files
  - my outgoing file request will busy wait if filename is not a known file.
+ - my requests_queue and downloads_queue already supports multiple chunks, but will need to 
+    adjust how acks are handeld and tag file chunks with sequence numbers
