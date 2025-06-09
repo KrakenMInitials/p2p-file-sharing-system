@@ -1,33 +1,82 @@
-Moe's P2P Networked File System
+# Simple Peer-to-Peer (P2P) Networked File System
 
+## INSTRUCTIONS
 
+- `peer.py` main() can be adjusted to simulate additional file requests, and files can be added to `initial_peer_folders` to support more peers.
+- Clearing folders is already implemented. For example, running `peer.py` with `peerID = 1` will clear the `peer-1` folder.
+- By default: Peer 1 has `dummyfile.txt`, Peer 2 has `piratedGame`. Peer 1 wants `piratedGame` and Peer 3 wants `dummyfile.txt`.
+- `demo.bat` automates this demonstration.
 
+### Storage & Broadcasts
 
+- Each peer's storage is simulated to be distributed using folders in the root directory (similar to Assignment 1).
+  - `initial_peer_folders` contains the initial files each peer should have.
+- Broadcasts are handled by binding all peers to a common UDP port and sending file offers to the port.
+  - Each peer has `broadcastListener` and `broadcasterSender` threads.
+  - Listener updates `known_files` dictionary (filenames: peerIDs).
+  - Sender uses `local_files` set to track local files to broadcast offers.
+- EOFs are communicated through a new protocol type 'E' with a checksum for the complete file.
+  - The first time a peer downloads a file from another peer, it will force a corruption of the checksum to simulate checksum failure.
+  - Checksum fail recovery involves wiping the local file and requesting the file again from scratch before killing the old thread and associated resources.
 
+### Central Server
 
+- Disconnected/crashed clients get removed from the central server registry.
+- Peer failure is abstracted away from other peers to an extent.
+- Duplicate ports or peerIDs are prevented.
+- Broadcasts are handled between peers.
 
+### Main Functions
 
+- Registration
+- Lookups
 
+---
 
+## Peer Logic (Thread Architecture)
 
+_Thread architecture I'm really proud of:_
 
-6/7/2025
+- A `server_soc` is kept connected to the central server by every peer for fetching lookups.
+- Each peer has two main functionalities:
+  - `global_requester()`: creates an 'outgoing' thread to handle outgoing requests, incoming file transfers, and outgoing acks for each peer.
+  - `global_listener()`: creates an 'incoming' thread to handle incoming requests, outgoing file transfers, and incoming acks for each peer.
 
-I used UDP to handle broadcasts because if I used TCP:
-1. I would have to flood a range of TCP ports on sending
-2. The bigger problem is the amount of parsing I have to do on recieving (all 4 msg types will arrive on the same port)
-Multiple processes on the same machine can listen to the same UDP port because its connectionless, and all processes/peers send to the same address. Messages sent from the same peer is ignored by the peer.
-So I spawned listener and sender threads for Broadcasting using UDP on the same port
+#### GlobalListener Thread
 
-The original assignment required acknowledgements messages to include which PeerID recieved the files: due to my logic and architecture in handling peers, this was additional info was rather useless.
+- Spawns a handler thread (Listener Thread) for each new incoming peer connection.
 
-I also created message type 'E' to signal EOF in file transfers.
+#### Listener Thread
 
-downloads_queue and requests_queue though exist will always hold one item max due to the busy waits for acks
+- Spawns a concurrent thread to process `requests_queue` (communicates with it through ack events).
+- Appends to `request_queue` on loop.
+- Remote peer crashes are handled gracefully.
 
+#### GlobalRequester Thread
 
-Ideas for improvement:
- - broadcast functionality does not include handling removed files and updating removed files
- - my outgoing file request will busy wait if filename is not a known file.
- - my requests_queue and downloads_queue already supports multiple chunks, but will need to 
-    adjust how acks are handeld and tag file chunks with sequence numbers
+- Creates a request and spawns a concurrent thread to process incoming file transfers ("downloads") through `downloads_queue`.
+- EOF is passed into the queue using a Sentinel marker (suggested by Copilot), and the concurrent thread adds the file to `local_files` before killing itself.
+- Core thread kills itself after.
+
+---
+
+## Protocol Table
+
+| Message Type       | Code | Format       | Purpose / Description                                                               |
+| ------------------ | ---- | ------------ | ----------------------------------------------------------------------------------- |
+| **File Offer**     | O    | `!cII64s`    | Peer advertises its available files                                     |
+| **File Request**   | R    | `!cI64s`     | Peer requests a file from another peer.                                             |
+| **File Transfer**  | T    | `!cI` + data | Sends a chunk of file data to the requesting peer.                                  |
+| **Acknowledgment** | A    | `!cI`        | Acknowledgement chunk.                                               |
+| **EOF/Checksum**   | E    | `!c64s`      | Signals end of file and provides file checksum  |
+
+### Central Server Protocol
+
+| Message Type          | Code | Format    | Purpose / Description                                                |
+| --------------------- | ---- | --------- | -------------------------------------------------------------------- |
+| **Register Request**  | S,R  | `!ccII`   | Peer requests to register itself on central server registry.          |
+| **Register Response** | S,R  | `!ccI`    | Server response to registration (1=success, 0=failure).              |
+| **Lookup Request**    | S,L  | `!ccI`    | Peer requests lookup of address of target peerID from the server.               |
+| **Lookup Response**   | S,L  | `!cc64sI` | Server response with the address (host, port) of the requested peer. |
+| **Error Response**    | S,E  | `!cc64s`  | Server error message.                                       |
+

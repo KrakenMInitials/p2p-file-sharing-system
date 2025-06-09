@@ -265,9 +265,9 @@ def uploadsThread(conn: socket.socket,
 
             expected_checksum = file_checksum(file_path)
             #send EOF
-            print("=======================")
-            print(f"EOF package: {build_file_transfer_EOF(expected_checksum)}")
-            print("=======================")
+            # print("=======================")
+            # print(f"EOF package: {build_file_transfer_EOF(expected_checksum)}")
+            # print("=======================")
             conn.sendall(build_file_transfer_EOF(expected_checksum))
         except queue.Empty:
             continue 
@@ -382,6 +382,10 @@ def main(): # args: peerID
 
     if peer_id == 1:
         filename:str = "piratedGame"
+        global_requester = threading.Thread(target=start_global_requester, args=(filename,), daemon=True)
+        global_requester.start() 
+    if peer_id == 3:
+        filename:str = "dummyfile.txt"
         global_requester = threading.Thread(target=start_global_requester, args=(filename,), daemon=True)
         global_requester.start() 
 
