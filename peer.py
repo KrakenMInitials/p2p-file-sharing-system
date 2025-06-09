@@ -125,8 +125,8 @@ def downloadsThread(conn: socket.socket,
                 conn.close()
                 break
                 #finish up thread chain
-
-            write_to_file_BYTE({os.path.join(peer_folder, filename)}, chunk)
+            #print(f"path: {os.path.join(peer_folder, filename)}")
+            write_to_file_BYTE(os.path.join(peer_folder, filename), chunk)
             ack_message = build_ack_message(peer_id)
             conn.sendall(ack_message)
         except queue.Empty:
@@ -203,7 +203,9 @@ def uploadsThread(conn: socket.socket,
                 conn.sendall(build_file_transfer(chunk))
 
                 while not acknowleged.is_set():
-                    acknowleged.wait(timeout=3) #blocking wait for ack response
+                    acknowleged.wait(timeout=10) #blocking wait for ack response
+                    if acknowleged.is_set():
+                        break
                     conn.sendall(build_file_transfer(chunk))
                     print(f"[uploadThread] ACK Timeout retransmitting chunk...")
                     if handle_err.is_set():
