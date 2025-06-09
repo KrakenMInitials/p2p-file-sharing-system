@@ -21,9 +21,10 @@ def build_ack_message(peer_id: int) -> bytes:
     msg_type = 'A'.encode('utf-8')
     return struct.pack("!cI", msg_type, peer_id)
 
-def build_file_transfer_EOF() -> bytes:
+def build_file_transfer_EOF(checksum: str) -> bytes:
     msg_type = 'E'.encode('utf-8')
-    return struct.pack("!c", msg_type)
+    enc_checksum = checksum.encode("utf-8")
+    return struct.pack("!c64s", msg_type, enc_checksum)
 #endregion BUILDS
 
 #region PARSES
@@ -46,6 +47,7 @@ def parse_ack_message(segment: bytes) -> int:
     _, peer_id = struct.unpack("!cI", segment)
     return peer_id
 
-def parse_file_transfer_EOF(): #just here to complete the builds and parses, doesn't really matter
-    return None
+def parse_file_transfer_EOF(segment: bytes) -> str: #returns expected checksum  
+    _, checksum = struct.unpack("!c64s", segment)
+    return checksum
 #endregion PARSES

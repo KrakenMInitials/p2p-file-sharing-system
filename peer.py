@@ -1,6 +1,17 @@
 import os, shutil, sys
 from globals import *
 from packet_format import *
+import hashlib
+
+#file checksum provided by Copilot
+def file_checksum(filepath): #returns checksum of a file
+    hasher = hashlib.sha256()
+    with open(filepath, 'rb') as f:
+        for chunk in iter(lambda: f.read(4096), b''):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+# end Copilot
+
 
 #INDIVIDUAL PEER INFORMATION STORED
 peer_id: int = -1
@@ -100,33 +111,45 @@ def handle_outgoing_peer(source_peer_address, filename: str):
 
     while True:
         raw_message = conn.recv(1024) # need to be > FILE_CHUNK_SIZE
-        if raw_message:
-            msg_type = raw_message[0:1].decode('utf-8')
-            if msg_type == 'T':  # incoming File Transfer
-                message = parse_file_transfer(raw_message)
-                downloads_queue.put(message)
-            elif msg_type == 'E':
-                downloads_queue.put(EOF_SENTINEL)
-                downloads_thread.join() #wait for child thread to die
-                break
-            else:
-                print(f"[Requester] Unexpected message type encountered, packets tossed.")
+        if not raw_message or len(raw_message) < 1:
+            continue
+        msg_type = chr(raw_message[0])
+        if msg_type == 'T':  # incoming File Transfer
+            message = parse_file_transfer(raw_message)
+            downloads_queue.put(message)
+        elif msg_type == 'E':
+            exp_checksum = parse_file_transfer_EOF((raw_message))
+            downloads_queue.put((EOF_SENTINEL, exp_checksum))
+            downloads_thread.join() #wait for child thread to die
+            break
+        else:
+            print(f"[Requester] Unexpected message type encountered, packets tossed.")
     print(f"[Requester] Request for {filename} ended.")
 
 def downloadsThread(conn: socket.socket,
                      download_queue: queue.Queue[bytes | object],
                        filename):
+    local_filepath = os.path.join(peer_folder, filename)
     while True:
         try:
             #download_queue has a queue of (raw_message, addr) intended for download on current peer
             chunk = download_queue.get(timeout=1) #waits 1 sec and raises Empty is empty
-            if chunk == EOF_SENTINEL:
+            if EOF_SENTINEL in chunk:
                 local_files.add(filename)
                 conn.close()
+
+                #if checksum mismatch, create a new global_sender() request
+                actual_checksum = file_checksum(local_filepath)
+                expected_checksum = chunk[1]
+
+                if actual_checksum != expected_checksum:
+                    print(f"[downloadsThread] Checksum failed: making new request.")
+                    new_request = threading.Thread(target=start_global_requester, args=(filename,), daemon=True)
+                    new_request.start() 
                 break
                 #finish up thread chain
             #print(f"path: {os.path.join(peer_folder, filename)}")
-            write_to_file_BYTE(os.path.join(peer_folder, filename), chunk)
+            write_to_file_BYTE(local_filepath, chunk)
             ack_message = build_ack_message(peer_id)
             conn.sendall(ack_message)
         except queue.Empty:
@@ -212,8 +235,9 @@ def uploadsThread(conn: socket.socket,
                         break
                 acknowleged.clear() #reset ack
 
+            expected_checksum = file_checksum(file_path)
             #send EOF
-            conn.sendall(build_file_transfer_EOF())
+            conn.sendall(build_file_transfer_EOF(expected_checksum))
         except queue.Empty:
             continue 
 

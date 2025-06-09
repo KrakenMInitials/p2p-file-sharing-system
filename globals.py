@@ -24,9 +24,6 @@ PEER_GRAPH = {
 
 def write_to_file_BYTE(path, data: bytes):
     try:
-        print("========")
-        print(f"data: {data}")
-        print("========")
         out_file = open(path, "ab")
     except FileNotFoundError:
         print(f"New {path} created.")
