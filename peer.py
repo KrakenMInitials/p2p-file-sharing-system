@@ -16,7 +16,6 @@ def file_checksum(filepath): #returns checksum of a file
 #INDIVIDUAL PEER INFORMATION STORED
 peer_id: int = -1
 peer_folder: str
-neighbours:set[int] = set()
 
 known_files:dict[str, int] = {
     # "filename": source_peer_id
@@ -188,10 +187,10 @@ def downloadsThread(conn: socket.socket,
     # can be incoming Requests
     # can be landing File Chunks
     
-def start_global_listener():
+def start_global_listener(addr: tuple[str:int]):
     soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     soc.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    soc.bind((PEER_IP_REGISTRY[peer_id]))
+    soc.bind(addr)
     soc.listen(5)  # Allow up to 5 queued connections
 
     while True:
@@ -290,7 +289,7 @@ def utility_split_file(filepath):
 
  # start() op on assignment desc.
  # path: the folder specific to the peer (may include local files)
-def initialize():
+def initialize(port: int):
     print("initalizing peer...")
     global peer_id, peer_folder
     peer_folder = f"./peer-{peer_id}"
@@ -311,20 +310,46 @@ def initialize():
         print(f"Initial files copied from {template_folder}.")
      # end of Github Copilot
 
-def main(): # args: peerID 
-    global peer_id, neighbours
+    #register to server
+    server_soc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_soc.connect(SERVER_ADDRESS)
+    registration = build_request_register(peer_id, port)
+    server_soc.sendall(registration)
 
-    if len(sys.argv) > 1:
+    #busy wait server
+    raw_response = server_soc.recv(1024)
+    if raw_response:
+        msg_type = raw_response[0:2].decode('utf-8')
+        if (msg_type == 'SR'):
+            print(f"PeerID {peer_id} successfully registered with {port}")
+        elif (msg_type == 'SE'):
+            err_msg = parse_response_error(raw_response)
+            print(f"Server Error: {err_msg}")
+            print("Closing client to prevent errors.")
+            sys.exit(1)
+        else:        
+            print("Unexpected server resposne. Closing client to prevent errors.")
+            sys.exit(1)
+
+    return server_soc
+
+def fetch_peer_address(target_peer_id: int):
+    #busy waits as well
+    
+
+def main(): # args: peerID 
+    global peer_id
+
+    if len(sys.argv) > 2:
         peer_id = int(sys.argv[1])
-        if peer_id in PEER_GRAPH:
-            neighbours.add(PEER_GRAPH[peer_id])
-            print(f"Peer ID {peer_id} connected.")
-        else:
-            print(f"Peer ID {peer_id} not currently in hardcoded list.")
+        port = int(sys.argv[2])
+        if (port == 5000):
+            print("Port 5000 reserved for Central Server")
+            sys.exit(1)
     else:
-        print("Usage: python peer.py <peer_id>")
+        print("Usage: python peer.py <peer_id> <port>")
         sys.exit(1)
-    initialize()
+    initialize(port)
 
     broadcast_listener = threading.Thread(target=listen_for_broadcasts, daemon=True)
     broadcast_listener.start()
@@ -332,7 +357,7 @@ def main(): # args: peerID
     broadcast_sender.start()
     print(f"Peer {peer_id} is now running and listening for broadcasts...")
 
-    global_listener = threading.Thread(target=start_global_listener, daemon=True)
+    global_listener = threading.Thread(target=start_global_listener, args=((LOCALHOST,port),), daemon=True)
     global_listener.start()
 
     if peer_id == 1:

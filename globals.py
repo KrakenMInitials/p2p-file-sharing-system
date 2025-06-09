@@ -3,17 +3,11 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import namedtuple as namedTuple
 
 LOCALHOST = "localhost"
+SERVER_ADDRESS = (LOCALHOST, 5000)
 
 FILE_CHUNK_SIZE = 1024 
 
  # will be replaced by central_server later
-PEER_IP_REGISTRY ={
-    1: (LOCALHOST, 5001),
-    2: (LOCALHOST, 5002),
-    3: (LOCALHOST, 5003),
-    4: (LOCALHOST, 5004),
-    5: (LOCALHOST, 5005),
-}
 
 PEER_GRAPH = {       
     1: (3),
